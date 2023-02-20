@@ -215,7 +215,7 @@ This cache is known as *Slab Cache*. It can be used to allocate memory in two wa
 
 The kernel must be capable of measuring time and time differences at various points (when scheduling processes and etc.). *Jiffies* are one possible time base. A global variable named *jiffies_64* and its 32-bit counterpart *jiffies* are incremented periodically at constant time intervals. The various timer mechanisms of the underlying architectures are used to perform these updates (each computer architecture provides some means of executing periodic actions, usually in the form of timer interrupts).
 
-Depending on architecture, *jiffies* is incremented with a frequency determined by the central constant `HZ` of the kernel. This is usually  on the range between 1,000 and 100; in other words, the value of jiffies is incremented between 1,000 and 100 times per second.
+Depending on architecture, *jiffies* is incremented with a frequency determined by the central constant `HZ` of the kernel. This is usually on the range between 1,000 and 100; in other words, the value of `jiffies` is incremented between 1,000 and 100 times per second.
 
 Timing based on *jiffies* is relatively coarse-grained because 1,000 Hz is not an excessively large frequency nowadays. With *high-resolution timers*, the kernel provides additional means that allows for keeping time in the regime of nanosecond precision and resolution, depending on the capabilities of the underlying hardware.
 
@@ -230,4 +230,53 @@ It is possible to make the periodic tick *dynamic*. When there is little to do a
 - **Directories and Filesystem**: Creating, deleting, and renaming directories, querying information, links, changing directories.
 - **Protection Mechanisms**: Reading and changing UIDs/GIDs, and namespace handling.
 - **Timer Functions**: Timer functions and statistical information.
+
+These functions can not be implemented in a normal user library because spacial protection mechanisms are needed to ensure that system stability and/or security are not endangered, and many calls are reliant on kernel-internal structures or functions to yield desired data or result.
+
+When a system call is issued, the processor must change the privilege level and switch from user mode to system mode. There is no standardized way of doing this in Linux as each hardware platform offers specific mechanisms. In some cases, different approaches are implemented on the same architecture but depend on processor type. What all variants have in common is that system calls are the only way of enabling user processes to switch in their own incentive from user mode to kernel mode in order to delegate system-critical tasks.
+
+### Device Drivers, Block and Character Devices
+
+> The role of device drivers is to communicate with I/O devices attached to the system; for example, hard disks, floppies, interfaces, sound cards, and so on. In accordance with the classical UNIX maxim that "*everything is a file*", access is performed using device files that usually reside in the `/dev` directory and can be processed by programs in the same way as regular files. The task of a device driver is to support application communication via device files; in other words, to enable data to be read from and written to a device in a suitable way.
+
+Peripheral devices belong to one of the following two groups:
+
+1. **Character Devices**: Deliver a continuous stream of data that applications read sequentially; generally, random access in not possible. Instead, such devices allow data to be read and written byte-by-byte or character-by-character. Modems are classical examples of character devices.
+
+2. **Block Devices**: Allow applications to address their data randomly and to freely select the position at which they want to read data. Typical block devices are hard disks because applications can address any position on the disk from which to read data. Also, data can be read or written only in multiples of block units (usually 512 bytes); character-based addressing, as in character devices, in not possible.
+
+> Programming drivers for block devices is much more complicated than for character devices because extensive caching mechanisms are used to boost system performance.
+
+### Networks
+
+Network cards are also controlled by device drivers but assume a special status in the kernel because they cannot be addressed using device files. This is because data are packed into various protocol layers during network communication. When data are received, the layers must be disassembled and analyzed by the kernel before the payload data are passed to the application. When the data are sent, the kernel must first pack the data into the various protocol layers to dispatch.
+
+However, to support work with network connections via the file interface (in the view of applications), Linux uses *sockets* from the BSD world; these act as agents between the application, file interface, and network implementation of the kernel.
+
+### Filesystems
+
+Linux systems are made up of many thousands or even millions of files whose data are stored on hard disks or other block devices (e.g. ZIP drives, floppies, CD-ROMs, etc.). Hierarchical filesystems are used; these allow stored data to be organized into directory structures and also have the job of linking other meta-information (owners, access rights, etc.) with the actual data. Many different filesystem approaches are supported by Linux: the standard filesystems Ext2 and Ext3, ReiserFS, XFS, VFAT (for reasons of compatibility with DOS), and countless more. The concepts on which they build differ drastically in part.
+
+Ext2 is based on *inodes*, that is, it makes a separate management structure known as an *inode* available on disk for each file. The inode contains not only all meta-information but also pointers to the associated data blocks. Hierarchical structures are set up by representing directories as regular files whose data section includes pointers to the inodes of all files contained in the directory. In contrast, ReiserFS makes extensive use of tree structures to deliver the same functionality.
+
+### Modules and Hotplugging
+
+> Modules are used to dynamically add functionality to the kernel at run time: device drivers, filesystems, network protocols, practically any subsystem (with the exception of basic functions, such as memory management, which are always needed) of the kernel can be modularized. This removes one of the significant disadvantages of monolithic kernels as compared with microkernel variants.
+
+Modules can also be unloaded from the kernel at run time, a useful aspect when developing new kernel components.
+
+Basically, modules are simply normal programs that execute in kernel space rather than in userspace. They must also provide certain sections that are executed when the module is initialized (and terminated) in order to register and de-register the module functions with the kernel.
+
+Modules are an essential requisite to support for *hotplugging*. Some buses (e.g., USB and FireWire) allow devices to be connected while the system is running without requiring a system reboot. When the system detects a new device, the requisite driver can be automatically added to the kernel by loading the corresponding module.
+
+Modules also enable kernels to be built to support all kinds of devices that the kernel can address without unnecessarily bloating kernel size. Once attached hardware has been detected, only the requisite modules are loaded, and the kernel remains free of superfluous drivers.
+
+### Caching
+
+The kernel uses *caches* to improve system performance. Data read from slow block devices are held in RAM for a while, even if they are no longer needed at the time. When an application next accesses the data, they can be read from fast RAM, thus bypassing the slow block device. Because the kernel implements access to block devices by means of page memory mappings, caches are also organized into pages, that is, whole pages are cached, thus giving rise to the name *page cache*.
+
+> The far less important *buffer cache* is used to cache data that are not organized into pages. On traditional UNIX systems, the buffer cache serves as the main system cache, and the same approach was used by Linux a long, long time ago. By now, the buffer cache has mostly been superseded by the page cache.
+
+### List Handling
+
 
