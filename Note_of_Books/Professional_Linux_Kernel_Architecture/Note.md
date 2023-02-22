@@ -279,4 +279,28 @@ The kernel uses *caches* to improve system performance. Data read from slow bloc
 
 ### List Handling
 
+The kernel is required to handle *doubly linked lists*. Standard lists as provided by the kernel can be used to link data structures of any type with each other, thus it is explicitly not *type-safe*. The data structures to be listed must contain an element of the `list_head` type; this accommodates the forward and back pointers. If a data structure is to be organized in several lists (which is normal), then several `list_head` elements are needed.
 
+In `<list.h>`:
+```C
+struct list_head {
+    struct list_head *next, *prev;
+}
+```
+This element could be placed in a data structure as follow:
+```C
+struct task_struct {
+...
+    struct list_head run_list;
+...
+};
+```
+The starting point for linked lists is again an instance of `list_head` that is usually declared and initialized by the `LIST_HEAD(list_name)` macro.
+
+`struct list_head` is called a *list element* when it is held in a data structure. An element that serves as the starting point for a list is called *list_head*.
+
+`list_entry` must be used to find a list element; at first glance, its call syntax apperas to be quite complicated: `list_entry(ptr, tyep, member)`. `ptr` is a pointer to the `list_head` instance of the data structure, `type` is its type, and `member` is the element name used for the list element. The following sample call would be needed to find a `task_struct` instance of a list:
+```C
+struct task_struct = list_entry(ptr, struct task_struct, run_list)
+```
+Explicit type specification is required because list implementation is not *type-safe*. The list element must be specified to find the correct element if there are data structures that are included in several lists.
