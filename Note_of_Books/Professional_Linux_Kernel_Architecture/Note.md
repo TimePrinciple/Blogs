@@ -304,3 +304,113 @@ The starting point for linked lists is again an instance of `list_head` that is 
 struct task_struct = list_entry(ptr, struct task_struct, run_list)
 ```
 Explicit type specification is required because list implementation is not *type-safe*. The list element must be specified to find the correct element if there are data structures that are included in several lists.
+
+### Object Management and Reference Counting
+
+The generic kernel object mechanism can be used to perform the following operations on objects:
+- Reference counting
+- Management of lists (sets) of objects
+- Locking of sets
+- Exporting object properties into userspace
+
+#### Generic Kernel Object
+
+`<kobject.h>`
+```C
+struct kobject {
+    const char          * k_name;
+    struct kref         kref;
+    struct list_head    entry;
+    struct kobject      * parent;
+    struct kset         * set;
+    struct kobj_type    * ktype;
+    struct sysfs_dirent * sd;
+}
+```
+The meanings of the individual elements of `struct kobject` are as follows:
+- `k_name` is a text name exported to userspace using `sysfs`. Sysfs is a virtual filesystem that allows for exporting various properties of the system into userspace. Likewise `sd` supports this connection.
+- `kref` holds the general type `strcut kref` designed to simplify reference management.
+- `entry` is a standard list element used to group several `kobjects` in a list (known as a set in this case).
+- `kset` is required when an object is grouped with other objects in a set.
+- `parent` is a pointer to the parent element and enables a hierarchical structure to be established between `kobject`s.
+- `ktype` provides more detailed information on the data structure in which a `kobject` is embedded. Of greatest importance is the destructor function that returns the resources of the embedding data structure.
+
+> It is essential that `kobject`s are not linked with other data structures by means of pointers but are directly embedded. Managing the kernel object itself amounts to managing the whole containing object this way. Since `struct kobject` is embedded into many data structures of the kernel, the developers take care to keep it small. Adding a single new element to this data structure results in a size increase of many other data structures. Embedded kernel objects look as follows:
+
+```C
+struct sample {
+...
+    struct kobject kobj;
+...
+};
+```
+
+The layout of the `kref` structure used to manage references is as follows:
+
+`<kref.h>`
+```C
+struct kref {
+    atomic_t refcount;
+};
+```
+`refcount` is an atomic data type to specify the number of positions in the kernel at which an object is currently being used. When the counter reaches 0, the object is no longer needed and can therefore be removed from memory.
+
+"Atomic" means in this context that incrementing and decrementing the variable is also safe on multiprocessor systems, where more than one code path can access an object at the same time.
+
+Encapsulation of the single value in a structure was chosen to prevent direct manipulation of the value. `kref_init` must always be used for initialization. If an object is in use, `kref_get` must be invoked beforehand to increment the reference counter. `kref_put` decrements the counter when the object is no longer used.
+
+> Although manipulating the reference counter this way against concurrency issues, this does not imply that the surrounding data structure is safe against concurrent access.
+
+#### Sets of Objects
+
+In many cases, it is necessary to group different kernel objects into a set (e.g., the set of all character devices or the set of all PCI-based devices). The data structure provided for this purpose is defined as follows:
+
+
+`<kobject.h>`
+```C
+struct kset {
+    struct kobj_type        * ktype;
+    struct list_head        list;
+...
+    struct kobject          kobj;
+    struct kset_uevent_ops  * uevent_ops;
+}
+```
+The `kset` serves as the first example for the use of kernel objects. Since the management structure for sets is nothing other than a kernel object, it can be managed via the previously discussed `struct kobj`. Indeed, an instance is embedded via `kobj`. It has nothing to do with the `kobject`s collected in the set, but only serves to manage the properties of the `kset` object itself.
+
+The other members:
+- `ktype` points to a further object that generalizes the behavior of the `kset`.
+- `list` is used to build a list of all kernel objects that are a member of the set.
+- `uevent_ops` provides several function pointers to methods that relay information about the state of the set to userland. This mechanism is used by the core of the driver, for instance, to format messages that inform about the addition of new devices.
+
+`<kobject.h>`
+```C
+struct kobj_type {
+...
+    struct sysfs_ops        * sysfs_ops;
+    struct attribute        ** default_attrs;
+}
+```
+Note that a `kobj_type` is not used to collect various kernel objects (this is already managed by `kset`s). Instead, it provides an interface to the sysfs filesystem. If multiple objects export similar information via the filesystem, then this can be simplified by using ktype to provide the required methods.
+
+### Type Definitions
+
+The kernel uses `typedef` to define various data types in order to make itself independent of architecture specific features because of the different bit lengths for standard data types on individual processors. `typedef`d variables must not be accessed directly, but only via auxiliary functions. This ensures that they are properly manipulated, although the type definition is transparent to the user.
+
+### Byte Order
+
+To represent numbers, modern computers use either the *big endian* or *little endian* format. The format indicates how multibyte data types are stored. With big endian ordering, the most significant byte is stored at the lowest address and the significance of the bytes decreases as the addresses increase. With little endian ordering, the least significant byte is stored at the lowest address and the significance of the bytes increases as the addresses increase.
+
+> Intel uses little endian.
+
+### Per-CPU Variables
+
+A particularity that does not occur in normal userspace programming is per-CPU variables. They are declared with `DEFINE_PER_CPU(name, type)`, where `name` is the variable name and `type` is the data type. On single-processor systems, this is not different from regular variable declaration. On SMP systems with several CPUs, an instance of the variable is created for each CPU. The instance for a particular CPU is selected with `get_cpu(name, cpu)`, where `smp_processor_id()`, which returns the identifier of the active processor, is usually used as the argument for `cpu`.
+
+Employing per-CPU variables has the advantage that the data required are more likely to be present in the cache of a processor and can therefore be accessed faster. This concept also skirts round several communication problems that would arise when using variables that can be accessed by all CPUs of a multiprocessor system.
+
+### Conclusion
+
+It must be taken into account that many architectures on which the kernel runs do not support **unaligned memory access** without further ado. This also affects portability of data structures across architectures because of padding that is inserted by the compiler.
+
+All kernel code must be protected against concurrency. Owing to he support of multiprocessor machines, Linux kernel code must be both **re-entrant** and **thread-safe**. That is, routines must allow being executed simultaneously, and data must be protected against parallel access.
