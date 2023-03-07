@@ -224,4 +224,66 @@ In reality, the structure also contains elements that are needed by the PID allo
 
 Note that thread group IDs are *not* contained in this collection. This is because the thread group ID is simply given by the PID of the thread group leader, so a separate entry is not necessary.
 
+### ? Obtain the `task_struct` by the `(local_pid_nr, ns)` tuple
 
+### ? Obtain the `local_pid_nr` by the `(task_struct, ID_TYPE, ns)` tuple
+
+### ? Obtain the `pid` instance by the `(numerical_pid, ns)` tuple
+
+TODO: 2 steps
+
+### ? Generate unique PIDs
+
+To keep track of which PIDs have been allocated and which are still free, the kernel uses a large bitmap in which each PIN is identified by a bit. The value of the PID is obtained from the position of the bit in the bitmap.
+
+---
+
+## Process Management System Calls
+
+The `fork` and `exec` system calls are not issued directly by application but are invoked via an intermediate layer (**the C standard library**) that is responsible for communication with the kernel.
+
+### Process Duplication
+
+The traditional UNIX system call to duplicate a process if `fork`. However, it is not the only call implemented by Linux for this purpose, there are three:
+
+1. `fork` is the heavy-weight call because it creates a full copy of the parent process that then executes as a child process. To reduce the effort associated with this call, Linux uses the *copy-on-write* technique.
+2. `vfork` is similar to fork but does not create a copy of the data of the parent process. Instead, it shares the data between the parent and child process. This saves a great deal of CPU time (and if one of the processes were to manipulate the shared data, the other would notice automatically). `vfork` is designed for the situation in which a child process just generated immediately executes an `execve` system call to load a new program. The kernel also guarantees that the parent process is blocked until the child process exits or starts a new program. **Since fork uses copy-on-write, the speed argument for vfork does not really count anymore, and its use should therefore be avoided**.
+3. `clone` generates threads and enables a decision to be made as to exactly which elements are to be shared between the parent and the child process and which are to be copied.
+
+### Copy on Write
+
+*copy-on-write* technique is used to prevent *all* data of the parent process from being copied when `fork` is executed. This technique exploits the fact that processes normally use only a fraction of their pages in memory (the pages most frequently accessed by the process are called the *working set*). When `fork` is called, the kernel would usually create an identical copy of each memory page of the parent process for the child process. This has two very negative effects:
+
+1. A large amount of RAM, a scarce resource, is used.
+2. The copy operation takes a long time.
+
+The negative impact is never greater if the application loads a new program using `exec` immediately after process duplication. This means, in effect, that the preceding copy operation was totally superfluous as the process address space is reinitialized and the data copied are no longer needed.
+
+---
+
+The kernel can get around this problem by using a trick. Not the entire address space of the process but only its page table are copied. These establish the link between virtual address space and physical pages. The address spaces of parent and child processes then point to the same physical pages.
+
+Parent and child processes must not be allowed to modify each other's pages (except of pages explicitly shared by both processes), which is why the page tables of *both* processes indicate that only read access is allowed to the pages.
+
+Providing that both processes have only read access to their pages in memory, data sharing between the two is not a problem because no changes can be made.
+
+As soon as one of the processes attempts to write to the copied pages, the processor reports an access error to the kernel (errors of this kind are called *page faults*). The kernel then references additional memory management data structures to check whether the page can be accessed in Read and Write mode or in Read mode only (if the latter is true, a *segmentation fault* must be reported to the process).
+
+The condition in which a page table entry indicates that a page is "Read Only" although normally it would be writable allows the kernel to recognize that the page is a COW page. It therefore creates a copy of the page that is assigned exclusively to the process (and may therefore also be used for write operations).
+
+The COW mechanism enables the kernel to delay copying of memory pages fro as long as possible and to make copying unnecessary in many cases. This saves a great deal of time.
+
+### Executing System Calls
+
+The entry point for the `fork`, `vfork`, and `clone` system calls are the `sys_fork`, `sys_vfork`, and `sys_clone` functions. Their definitions are **architecture-dependent** because the way in which parameters are passed between userspace and kernel space differs on the various architectures. The task of the above functions is to **extract the information supplied by userspace** from the registers of processors and then to invoke the **architecture-independent** `do_fork` function responsible for process duplication.
+
+`do_fork` requires the following arguments:
+- A flag set (clone_flags) to specify duplication properties. The low byte specifies the signal number to be sent to the parent process when the child process terminates (`SIGCHLD`).
+- The start address of the user mode stack (`start_stack`) to be used. (Initially the same stack is used for the parent and child process. However, the COW mechanism creates a copy of the stack for each process if it is manipulated and therefore written to)
+- A pointer to the register set holding the call parameters in raw form (`regs`). The data type used is the architecture-specific `strcut pt_regs` structure, which holds all registers in the order in which they are saved on the kernel stack when a system call is executed.
+- The size of the user mode stack (`stack_size`). This parameter is usually unnecessary and set to 0.
+- Two pointers to addresses in userspace (`parent_tidptr` and `child_tidptr`) that hold the TIDs of the parent and child process. They are need for the thread implementation of the NPTL (Native Posix Threads Library) library.
+
+If `do_fork` was successful, the PID of the newly created task is returned as the result of the system call. Otherwise the (negative) error code is returned.
+
+> Linux sometimes has to return a pointer if an operation succeeds, and an error code if something fails. Unfortunately, the C language only allows a single direct return value per function, so any information about possible errors has to be encoded into the pointer. While pointers can in general point to arbitrary locations in memory, each architecture supported by Linux has a region in virtual address space that starts from virtual address `0` and goes at least `4KiB` far where no senseful information can live. The kernel can thus reuse this pointer range to encode error codes: If the return value of `fork` points to an address within the aforementioned range, then the call has failed, and the reason can be determined by the numerical value of the pointer. `ERR_PTR` is a helper macro to perform the encoding of the numerical constant `EINVAL` (invalid operation) into a pointer.
